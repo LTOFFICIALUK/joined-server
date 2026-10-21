@@ -4,10 +4,16 @@ type CacheEntry = { at: number; data: unknown }
 const cache = new Map<string, CacheEntry>()
 
 const remember = async <T>(key: string, ttlMs: number, fn: () => Promise<T>) => {
+  const now = Date.now()
   const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < ttlMs) return hit.data as T
+  if (hit && now - hit.at < ttlMs) return hit.data as T
   const data = await fn()
-  cache.set(key, { at: Date.now(), data })
+  if (cache.size > 200) {
+    for (const [entryKey, entry] of cache) {
+      if (now - entry.at > 60_000) cache.delete(entryKey)
+    }
+  }
+  cache.set(key, { at: now, data })
   return data
 }
 

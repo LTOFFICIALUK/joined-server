@@ -63,8 +63,15 @@ export const attachHub = (server: HttpServer) => {
       }
       const coin = parsed.data?.coin ?? parsed.data?.s
       for (const client of clients) {
-        const open = client.socket.readyState === WebSocket.OPEN
-        if (!open) continue
+        if (client.socket.readyState !== WebSocket.OPEN) {
+          clients.delete(client)
+          continue
+        }
+        if (client.socket.bufferedAmount > 1_000_000) {
+          clients.delete(client)
+          client.socket.close()
+          continue
+        }
         if (parsed.channel === "allMids" || parsed.channel === "subscriptionResponse" || (coin && client.coins.has(coin))) {
           client.socket.send(text)
         }
@@ -101,5 +108,9 @@ export const attachHub = (server: HttpServer) => {
       }
     })
     socket.on("close", () => clients.delete(client))
+    socket.on("error", () => {
+      clients.delete(client)
+      socket.close()
+    })
   })
 }
