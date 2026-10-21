@@ -32,26 +32,37 @@ export const attachHub = (server: HttpServer) => {
     }
   }
 
+  const releaseUpstream = () => {
+    const socket = upstream
+    upstream = null
+    connecting = false
+    subscribed.clear()
+    if (socket && socket.readyState !== WebSocket.CLOSED) socket.close()
+  }
+
   const ensureCoin = (coin: string) => {
+    if (!clients.size) return
+    connectUp()
     if (subscribed.has(coin)) return
     subscribed.add(coin)
-    sendUp({ method: "subscribe", subscription: { type: "l2Book", coin } })
-    sendUp({ method: "subscribe", subscription: { type: "trades", coin } })
     sendUp({ method: "subscribe", subscription: { type: "activeAssetCtx", coin } })
   }
 
   const connectUp = () => {
+    if (!clients.size) return
     if (connecting || upstream?.readyState === WebSocket.OPEN || upstream?.readyState === WebSocket.CONNECTING) return
     connecting = true
     const socket = new WebSocket(env.hlWsUrl)
     upstream = socket
     socket.on("open", () => {
       connecting = false
-      sendUp({ method: "subscribe", subscription: { type: "allMids", dex: "xyz" } })
-      for (const coin of subscribed) {
-        subscribed.delete(coin)
-        ensureCoin(coin)
+      if (!clients.size) {
+        releaseUpstream()
+        return
       }
+      const coins = [...subscribed]
+      subscribed.clear()
+      for (const coin of coins) ensureCoin(coin)
     })
     socket.on("message", (raw: RawData) => {
       const text = raw.toString()
@@ -72,7 +83,7 @@ export const attachHub = (server: HttpServer) => {
           client.socket.close()
           continue
         }
-        if (parsed.channel === "allMids" || parsed.channel === "subscriptionResponse" || (coin && client.coins.has(coin))) {
+        if (parsed.channel === "subscriptionResponse" || (coin && client.coins.has(coin))) {
           client.socket.send(text)
         }
       }
@@ -81,12 +92,10 @@ export const attachHub = (server: HttpServer) => {
       if (upstream !== socket) return
       connecting = false
       upstream = null
-      setTimeout(connectUp, 1500)
+      if (clients.size > 0) setTimeout(connectUp, 1500)
     })
     socket.on("error", () => socket.close())
   }
-
-  connectUp()
 
   wss.on("connection", (socket) => {
     const client: Client = { socket, coins: new Set(["xyz:NVDA"]) }
@@ -107,7 +116,10 @@ export const attachHub = (server: HttpServer) => {
         return
       }
     })
-    socket.on("close", () => clients.delete(client))
+    socket.on("close", () => {
+      clients.delete(client)
+      if (!clients.size) releaseUpstream()
+    })
     socket.on("error", () => {
       clients.delete(client)
       socket.close()

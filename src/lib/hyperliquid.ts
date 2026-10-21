@@ -1,19 +1,17 @@
 import { env } from "./env.js"
 
-type CacheEntry = { at: number; data: unknown }
+type CacheEntry = { at: number; ttl: number; data: unknown }
 const cache = new Map<string, CacheEntry>()
 
 const remember = async <T>(key: string, ttlMs: number, fn: () => Promise<T>) => {
   const now = Date.now()
   const hit = cache.get(key)
-  if (hit && now - hit.at < ttlMs) return hit.data as T
+  if (hit && now - hit.at < hit.ttl) return hit.data as T
   const data = await fn()
-  if (cache.size > 200) {
-    for (const [entryKey, entry] of cache) {
-      if (now - entry.at > 60_000) cache.delete(entryKey)
-    }
+  for (const [entryKey, entry] of cache) {
+    if (now - entry.at >= entry.ttl) cache.delete(entryKey)
   }
-  cache.set(key, { at: now, data })
+  cache.set(key, { at: now, ttl: ttlMs, data })
   return data
 }
 
