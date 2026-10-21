@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  phantomPubkey String    @unique
+  evmAddress    String?
+  hlKeyEnc      String?
+  solKeyEnc     String?
+  solAddress    String?
+  displayName   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  deposits      Deposit[]
+  joins         Join[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model AuthNonce {
+  id        String   @id @default(cuid())
+  pubkey    String
+  nonce     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([pubkey])
+}
+
+model Deposit {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  intentId       String?
+  depositAddress String?
+  originAsset    String
+  destAsset      String
+  amount         String
+  status         String   @default("pending")
+  confidential   Boolean  @default(true)
+  raw            Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+model Join {
+  id        String       @id @default(cuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trader    String
+  sizeUsd   Float
+  status    String       @default("active")
+  seen      Json
+  pending   Json
+  copied    Json
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  stoppedAt DateTime?
+  actions   CopyAction[]
+
+  @@unique([userId, trader])
+  @@index([status, trader])
+}
+
+model CopyAction {
+  id                  String   @id @default(cuid())
+  joinId              String
+  join                Join     @relation(fields: [joinId], references: [id], onDelete: Cascade)
+  coin                String
+  traderAction        String
+  ourAction           String
+  traderSize          Float
+  traderAccountValue  Float
+  scale               Float
+  ourSize             Float
+  side                String
+  leverage            Int
+  status              String
+  detail              String
+  createdAt           DateTime @default(now())
+
+  @@index([joinId, createdAt])
+}
