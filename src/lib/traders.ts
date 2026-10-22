@@ -219,27 +219,36 @@ const scanBoard = async () => {
   return assignNicknames(traders.sort((a, b) => b.score - a.score))
 }
 
-export const traderBoard = async () => {
-  if (board && Date.now() - board.at < 15_000) return board.traders
-  if (!inflight) {
-    inflight = scanBoard()
-      .then((traders) => {
-        const previous = board?.traders ?? []
-        const weak = previous.length >= 8 && traders.length < previous.length * 0.6
-        const next = weak ? previous : traders
-        board = { at: Date.now() - (weak ? 10_000 : 0), traders: next }
-        return next
-      })
-      .finally(() => {
-        inflight = null
-      })
-  }
-  if (board) return board.traders
+const BOARD_MS = 20_000
+
+const refreshBoard = () => {
+  if (inflight) return inflight
+  inflight = scanBoard()
+    .then((traders) => {
+      const previous = board?.traders ?? []
+      const weak = previous.length >= 8 && traders.length < previous.length * 0.6
+      const next = weak ? previous : traders
+      board = { at: Date.now() - (weak ? 10_000 : 0), traders: next }
+      return next
+    })
+    .finally(() => {
+      inflight = null
+    })
   return inflight
+}
+
+export const traderBoard = async () => {
+  const fresh = board && Date.now() - board.at < BOARD_MS
+  if (fresh && board) return board.traders
+  const pending = refreshBoard()
+  if (board?.traders.length) return board.traders
+  return pending
 }
 
 export const traderByAddress = async (address: string) => {
   const normalized = address.toLowerCase()
+  const listed = board?.traders.find((item) => item.address.toLowerCase() === normalized)
+  if (listed) return listed
   const payload = await getLeaderboard()
   const row = (payload.leaderboardRows ?? []).find((item) => item.ethAddress.toLowerCase() === normalized)
   const counts = await joinCountMap()
@@ -301,8 +310,11 @@ export type TapePrint = {
 let tapeCache: { at: number; rows: TapePrint[] } | null = null
 let tapeInflight: Promise<TapePrint[]> | null = null
 
+const TAPE_MS = 20_000
+
 export const traderTape = async () => {
-  if (tapeCache && Date.now() - tapeCache.at < 20_000) return tapeCache.rows
+  const fresh = tapeCache && Date.now() - tapeCache.at < TAPE_MS
+  if (fresh && tapeCache) return tapeCache.rows
   if (tapeInflight) return tapeCache?.rows.length ? tapeCache.rows : tapeInflight
   const run = async () => {
   const traders = await traderBoard()
@@ -332,7 +344,26 @@ export const traderTape = async () => {
   tapeInflight = run().finally(() => {
     tapeInflight = null
   })
+  if (tapeCache?.rows.length) return tapeCache.rows
   return tapeInflight
+}
+
+export const startPublicCache = () => {
+  const tick = () => {
+    if (!board || Date.now() - board.at >= BOARD_MS) {
+      void traderBoard().catch((err) => {
+        console.error(err instanceof Error ? err.message : "Board refresh failed")
+      })
+    }
+    if (!tapeCache || Date.now() - tapeCache.at >= TAPE_MS) {
+      void traderTape().catch((err) => {
+        console.error(err instanceof Error ? err.message : "Tape refresh failed")
+      })
+    }
+  }
+  tick()
+  const timer = setInterval(tick, BOARD_MS)
+  timer.unref()
 }
 
 export const stockMarkets = async () => {

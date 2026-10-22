@@ -4,6 +4,7 @@ import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { logger } from "hono/logger"
 import { startCopyEngine } from "./lib/copyEngine.js"
+import { startPublicCache } from "./lib/traders.js"
 import { env } from "./lib/env.js"
 import { isAllowedOrigin } from "./lib/origin.js"
 import { account } from "./routes/account.js"
@@ -60,6 +61,7 @@ app.route("/joins", joins)
 const server = serve({ fetch: app.fetch, port: env.port }, (info) => {
   console.log(`joined server on ${info.port}`)
   startCopyEngine()
+  startPublicCache()
 })
 
 attachHub(server as HttpServer)

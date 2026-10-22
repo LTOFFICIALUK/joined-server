@@ -370,4 +370,4 @@ const loadRecentStockFills = async (user: string) => {
 }
 
 export const recentStockFills = (user: string) =>
-  remember(`fills:${user.toLowerCase()}`, 20_000, () => loadRecentStockFills(user))
+  remember(`fills:${user.toLowerCase()}`, 60_000, () => loadRecentStockFills(user))
