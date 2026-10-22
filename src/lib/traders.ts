@@ -224,8 +224,11 @@ export const traderBoard = async () => {
   if (!inflight) {
     inflight = scanBoard()
       .then((traders) => {
-        board = { at: Date.now(), traders }
-        return traders
+        const previous = board?.traders ?? []
+        const weak = previous.length >= 8 && traders.length < previous.length * 0.6
+        const next = weak ? previous : traders
+        board = { at: Date.now() - (weak ? 10_000 : 0), traders: next }
+        return next
       })
       .finally(() => {
         inflight = null
@@ -296,9 +299,12 @@ export type TapePrint = {
 }
 
 let tapeCache: { at: number; rows: TapePrint[] } | null = null
+let tapeInflight: Promise<TapePrint[]> | null = null
 
 export const traderTape = async () => {
   if (tapeCache && Date.now() - tapeCache.at < 20_000) return tapeCache.rows
+  if (tapeInflight) return tapeCache?.rows.length ? tapeCache.rows : tapeInflight
+  const run = async () => {
   const traders = await traderBoard()
   const batches = await mapPool(traders, 3, async (trader) => {
     const fills = await recentStockFills(trader.address).catch(() => [])
@@ -319,8 +325,14 @@ export const traderTape = async () => {
     })
   })
   const rows = batches.flat().filter((row) => row.size > 0 && row.price > 0).sort((a, b) => b.time - a.time).slice(0, 40)
+  if (!rows.length) return tapeCache?.rows ?? []
   tapeCache = { at: Date.now(), rows }
   return rows
+  }
+  tapeInflight = run().finally(() => {
+    tapeInflight = null
+  })
+  return tapeInflight
 }
 
 export const stockMarkets = async () => {
