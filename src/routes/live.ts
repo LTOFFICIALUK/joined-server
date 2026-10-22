@@ -5,6 +5,7 @@ import { formatPrice, formatSize } from "@nktkas/hyperliquid/utils"
 import { privateKeyToAccount } from "viem/accounts"
 import { prisma } from "../lib/prisma.js"
 import { readSession } from "../lib/auth.js"
+import { tradeError } from "../lib/tradeError.js"
 import { getClearinghouse, listMarkets, getDexOpenOrders } from "../lib/hyperliquid.js"
 import { ensureLiveWallet } from "../lib/liveWallet.js"
 import { creditLive } from "../lib/creditLive.js"
@@ -212,7 +213,7 @@ live.post("/order", async (c) => {
     if (!message || message === "null" || message === "undefined") {
       return c.json({ result: { status: "ok" }, address: wallet.address })
     }
-    return c.json({ error: message }, 400)
+    return c.json({ error: tradeError(message) }, 400)
   }
 })
 

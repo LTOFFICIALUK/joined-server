@@ -5,6 +5,7 @@ import { privateKeyToAccount } from "viem/accounts"
 import { listMarkets, stockStateOf, type MarketRow, type StockPosition } from "./hyperliquid.js"
 import { ensureLiveWallet } from "./liveWallet.js"
 import { prisma } from "./prisma.js"
+import { tradeError } from "./tradeError.js"
 
 const MIN_NOTIONAL = 10
 const EPS = 1e-8
@@ -290,7 +291,7 @@ const syncJoin = async (
       })
       await saveJoin(join.id, seen, pending, copied)
     } catch (err) {
-      const detail = err instanceof Error && err.message.trim() ? err.message.trim() : "Order rejected"
+      const detail = tradeError(err)
       await logAction({
         joinId: join.id,
         coin,
@@ -400,7 +401,7 @@ export const closeCopied = async (joinId: string, userId: string) => {
         },
       })
     } catch (err) {
-      errors.push(err instanceof Error ? err.message : `Could not close ${coin}`)
+      errors.push(tradeError(err instanceof Error ? err.message : "Could not close"))
     }
   }
   if (errors.length) {
