@@ -416,6 +416,7 @@ live.get("/activity", async (c) => {
         amountUsd: Number(raw.amountUsd ?? 0),
         sol: Number(raw.sol ?? 0),
         message: typeof raw.message === "string" ? raw.message : "",
+        txHash: typeof raw.txHash === "string" ? raw.txHash : "",
         createdAt: row.createdAt,
       }
     }),

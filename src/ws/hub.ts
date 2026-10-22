@@ -2,8 +2,9 @@ import type { IncomingMessage, Server as HttpServer } from "node:http"
 import { WebSocketServer, WebSocket, type RawData } from "ws"
 import { env } from "../lib/env.js"
 import { isAllowedOrigin } from "../lib/origin.js"
+import { traderTape } from "../lib/traders.js"
 
-type Client = { socket: WebSocket; coins: Set<string> }
+type Client = { socket: WebSocket; coins: Set<string>; tape: boolean }
 
 type UpstreamMessage = {
   channel?: string
@@ -22,6 +23,7 @@ export const attachHub = (server: HttpServer) => {
   })
 
   const clients = new Set<Client>()
+  let tapeTimer: ReturnType<typeof setInterval> | null = null
   let upstream: WebSocket | null = null
   let connecting = false
   const subscribed = new Set<string>()
@@ -97,8 +99,26 @@ export const attachHub = (server: HttpServer) => {
     socket.on("error", () => socket.close())
   }
 
+  const pushTape = async () => {
+    if (![...clients].some((client) => client.tape)) return
+    const rows = await traderTape().catch(() => [])
+    const text = JSON.stringify({ type: "tape", rows })
+    for (const client of clients) {
+      if (!client.tape || client.socket.readyState !== WebSocket.OPEN) continue
+      client.socket.send(text)
+    }
+  }
+
+  const ensureTape = () => {
+    if (tapeTimer) return
+    tapeTimer = setInterval(() => {
+      void pushTape()
+    }, 8_000)
+    void pushTape()
+  }
+
   wss.on("connection", (socket) => {
-    const client: Client = { socket, coins: new Set(["xyz:NVDA"]) }
+    const client: Client = { socket, coins: new Set(["xyz:NVDA"]), tape: false }
     clients.add(client)
     ensureCoin("xyz:NVDA")
     socket.on("message", (raw: RawData) => {
@@ -106,6 +126,11 @@ export const attachHub = (server: HttpServer) => {
         const msg = JSON.parse(raw.toString()) as { type?: string; coin?: string }
         if (msg.type === "ping") {
           socket.send(JSON.stringify({ type: "pong" }))
+          return
+        }
+        if (msg.type === "tape") {
+          client.tape = true
+          ensureTape()
           return
         }
         if (msg.type === "watch" && msg.coin) {

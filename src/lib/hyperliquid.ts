@@ -310,11 +310,16 @@ export const getStockBooks = async (user: string) => {
 
 export type PnlPoint = { t: number; v: number }
 
-export const monthPnlSeries = (portfolio: unknown): PnlPoint[] => {
+export const pnlSeries = (portfolio: unknown, windowName: "week" | "month" | "allTime"): PnlPoint[] => {
   if (!Array.isArray(portfolio)) return []
+  const keys = windowName === "week"
+    ? ["week", "perpWeek"]
+    : windowName === "allTime"
+      ? ["allTime", "perpAllTime"]
+      : ["month", "perpMonth"]
   const rows = portfolio as Array<[string, { pnlHistory?: Array<[number, string]> }]>
-  const month = rows.find((row) => row[0] === "month") ?? rows.find((row) => row[0] === "perpMonth")
-  const history = month?.[1]?.pnlHistory
+  const found = rows.find((row) => keys.includes(row[0]))
+  const history = found?.[1]?.pnlHistory
   if (!Array.isArray(history)) return []
   const points = history.flatMap((point) => {
     const t = Number(point?.[0])
@@ -326,6 +331,8 @@ export const monthPnlSeries = (portfolio: unknown): PnlPoint[] => {
   const step = Math.ceil(points.length / 48)
   return points.filter((_, index) => index % step === 0 || index === points.length - 1)
 }
+
+export const monthPnlSeries = (portfolio: unknown): PnlPoint[] => pnlSeries(portfolio, "month")
 
 export type RawFill = {
   coin?: string

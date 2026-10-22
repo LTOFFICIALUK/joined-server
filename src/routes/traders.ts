@@ -1,5 +1,5 @@
 import { Hono } from "hono"
-import { traderBoard, traderByAddress, traderFills, traderTape } from "../lib/traders.js"
+import { joinersFor, siteStats, stockMarket, stockMarkets, traderBoard, traderByAddress, traderFills, traderTape } from "../lib/traders.js"
 
 export const traders = new Hono()
 
@@ -13,6 +13,27 @@ traders.get("/", async (c) => {
 traders.get("/tape", async (c) => {
   const rows = await traderTape()
   return c.json({ tape: rows, asOf: Date.now() })
+})
+
+traders.get("/markets", async (c) => {
+  const rows = await stockMarkets()
+  return c.json({ markets: rows, asOf: Date.now() })
+})
+
+traders.get("/markets/:ticker", async (c) => {
+  const market = await stockMarket(c.req.param("ticker"))
+  if (!market) return c.json({ error: "No top wallet holds that market." }, 404)
+  return c.json({ market, asOf: Date.now() })
+})
+
+traders.get("/stats", async (c) => {
+  return c.json({ stats: await siteStats(), asOf: Date.now() })
+})
+
+traders.get("/:address/joiners", async (c) => {
+  const address = c.req.param("address")
+  if (!addressOf(address)) return c.json({ error: "Unknown trader" }, 400)
+  return c.json({ joiners: await joinersFor(address) })
 })
 
 traders.get("/:address", async (c) => {

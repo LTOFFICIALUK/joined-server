@@ -2,7 +2,7 @@ import {
   getLeaderboard,
   getPortfolio,
   mapPool,
-  monthPnlSeries,
+  pnlSeries,
   recentStockFills,
   stockDexNames,
   stockStateOf,
@@ -10,6 +10,7 @@ import {
   type PnlPoint,
   type StockPosition,
 } from "./hyperliquid.js"
+import { assignNicknames } from "./nicknames.js"
 import { prisma } from "./prisma.js"
 
 export type TraderView = {
@@ -28,12 +29,19 @@ export type TraderView = {
     leverage: number
     positionValue: number
     unrealizedPnl: number
+    entryPx: number
+    liquidation: number | null
+    markPx: number
   }>
+  pnl7Series: PnlPoint[]
   pnl30Series: PnlPoint[]
+  pnlAllSeries: PnlPoint[]
+  pnlAll: number | null
   joined: number
   winRate: number
   maxDrop: number
   score: number
+  nickname: string
 }
 
 const monthStats = (series: PnlPoint[]) => {
@@ -83,7 +91,33 @@ const publicPosition = (position: StockPosition) => ({
   leverage: position.leverage,
   positionValue: position.positionValue,
   unrealizedPnl: position.unrealizedPnl,
+  entryPx: position.entryPx,
+  liquidation: position.liquidation,
+  markPx: position.size > 0 ? position.positionValue / position.size : 0,
 })
+
+const listedPositions = (positions: StockPosition[]) =>
+  [...positions].sort((a, b) => b.positionValue - a.positionValue).map(publicPosition)
+
+const readCurves = async (address: string) => {
+  try {
+    const portfolio = await getPortfolio(address)
+    return {
+      pnl7Series: pnlSeries(portfolio, "week"),
+      pnl30Series: pnlSeries(portfolio, "month"),
+      pnlAllSeries: pnlSeries(portfolio, "allTime"),
+    }
+  } catch {
+    return { pnl7Series: [] as PnlPoint[], pnl30Series: [] as PnlPoint[], pnlAllSeries: [] as PnlPoint[] }
+  }
+}
+
+const allTimePnl = (row: LeaderboardRow | null, series: PnlPoint[]) => {
+  const found = row?.windowPerformances?.find((item) => item[0] === "allTime" || item[0] === "perpAllTime")
+  if (found) return Number(found[1]?.pnl ?? 0)
+  if (series.length >= 2) return (series[series.length - 1]?.v ?? 0) - (series[0]?.v ?? 0)
+  return null
+}
 
 const joinCountMap = async () => {
   try {
@@ -112,14 +146,7 @@ const buildTrader = async (
   }
   if (!stock.positions.length) return null
   const accountValue = stock.accountValue > 0 ? stock.accountValue : Number(row.accountValue ?? 0)
-  let series: PnlPoint[] = []
-  if (withSeries) {
-    try {
-      series = monthPnlSeries(await getPortfolio(address))
-    } catch {
-      series = []
-    }
-  }
+  const curves = withSeries ? await readCurves(address) : { pnl7Series: [], pnl30Series: [], pnlAllSeries: [] }
   return scored({
     address,
     displayName: row.displayName ?? null,
@@ -128,9 +155,11 @@ const buildTrader = async (
     pnl30d: windowValue(row, "month", "pnl"),
     roi7d: windowValue(row, "week", "roi"),
     roi30d: windowValue(row, "month", "roi"),
-    positions: stock.positions.map(publicPosition),
-    pnl30Series: series,
+    positions: listedPositions(stock.positions),
+    ...curves,
+    pnlAll: allTimePnl(row, curves.pnlAllSeries),
     joined,
+    nickname: "",
   })
 }
 
@@ -171,12 +200,7 @@ const scanBoard = async () => {
   const traders = await mapPool(found, 4, async (item) => {
     const stock = item.stock
     const accountValue = stock.accountValue > 0 ? stock.accountValue : Number(item.row.accountValue ?? 0)
-    let series: PnlPoint[] = []
-    try {
-      series = monthPnlSeries(await getPortfolio(item.row.ethAddress))
-    } catch {
-      series = []
-    }
+    const curves = await readCurves(item.row.ethAddress)
     return scored({
       address: item.row.ethAddress,
       displayName: item.row.displayName ?? null,
@@ -185,12 +209,14 @@ const scanBoard = async () => {
       pnl30d: windowValue(item.row, "month", "pnl"),
       roi7d: windowValue(item.row, "week", "roi"),
       roi30d: windowValue(item.row, "month", "roi"),
-      positions: stock.positions.map(publicPosition),
-      pnl30Series: series,
+      positions: listedPositions(stock.positions),
+      ...curves,
+      pnlAll: allTimePnl(item.row, curves.pnlAllSeries),
       joined: counts.get(item.row.ethAddress.toLowerCase()) ?? 0,
+      nickname: "",
     }) satisfies TraderView
   })
-  return traders.sort((a, b) => b.score - a.score)
+  return assignNicknames(traders.sort((a, b) => b.score - a.score))
 }
 
 export const traderBoard = async () => {
@@ -217,26 +243,28 @@ export const traderByAddress = async (address: string) => {
   if (!row) {
     const stock = await stockStateOf(address)
     if (!stock.positions.length) return null
-    let series: PnlPoint[] = []
-    try {
-      series = monthPnlSeries(await getPortfolio(address))
-    } catch {
-      series = []
-    }
-    return scored({
+    const curves = await readCurves(address)
+    const view = scored({
       address,
       displayName: null,
       accountValue: stock.accountValue,
       pnl7d: 0,
-      pnl30d: series.length ? series[series.length - 1].v - series[0].v : 0,
+      pnl30d: curves.pnl30Series.length >= 2 ? (curves.pnl30Series[curves.pnl30Series.length - 1]?.v ?? 0) - (curves.pnl30Series[0]?.v ?? 0) : 0,
       roi7d: 0,
       roi30d: 0,
-      positions: stock.positions.map(publicPosition),
-      pnl30Series: series,
+      positions: listedPositions(stock.positions),
+      ...curves,
+      pnlAll: allTimePnl(null, curves.pnlAllSeries),
       joined: counts.get(normalized) ?? 0,
-    }) satisfies TraderView
+      nickname: "",
+    })
+    const known = (await traderBoard()).find((item) => item.address.toLowerCase() === normalized)
+    return { ...view, nickname: known?.nickname || assignNicknames([view])[0]?.nickname || "Quiet Book" }
   }
-  return buildTrader(row, counts.get(normalized) ?? 0, true)
+  const view = await buildTrader(row, counts.get(normalized) ?? 0, true)
+  if (!view) return null
+  const known = (await traderBoard()).find((item) => item.address.toLowerCase() === normalized)
+  return { ...view, nickname: known?.nickname || assignNicknames([view])[0]?.nickname || "Quiet Book" }
 }
 
 export const traderFills = async (address: string) => {
@@ -257,32 +285,150 @@ export const traderFills = async (address: string) => {
 
 export type TapePrint = {
   address: string
+  nickname: string
   label: string
   side: "long" | "short"
   size: number
   price: number
   time: number
+  dir: string
+  leverage: number | null
 }
 
 let tapeCache: { at: number; rows: TapePrint[] } | null = null
 
 export const traderTape = async () => {
   if (tapeCache && Date.now() - tapeCache.at < 20_000) return tapeCache.rows
-  const traders = (await traderBoard()).slice(0, 6)
+  const traders = await traderBoard()
   const batches = await mapPool(traders, 3, async (trader) => {
     const fills = await recentStockFills(trader.address).catch(() => [])
-    return fills.slice(0, 8).map((fill) => ({
-      address: trader.address,
-      label: (fill.coin ?? "").split(":").pop() ?? "",
-      side: fill.side === "B" ? "long" as const : "short" as const,
-      size: Number(fill.sz ?? 0),
-      price: Number(fill.px ?? 0),
-      time: Number(fill.time ?? 0),
-    }))
+    return fills.slice(0, 3).map((fill) => {
+      const label = (fill.coin ?? "").split(":").pop() ?? ""
+      const held = trader.positions.find((position) => position.label === label)
+      return {
+        address: trader.address,
+        nickname: trader.nickname,
+        label,
+        side: fill.side === "B" ? "long" as const : "short" as const,
+        size: Number(fill.sz ?? 0),
+        price: Number(fill.px ?? 0),
+        time: Number(fill.time ?? 0),
+        dir: fill.dir ?? "",
+        leverage: held ? held.leverage : null,
+      }
+    })
   })
   const rows = batches.flat().filter((row) => row.size > 0 && row.price > 0).sort((a, b) => b.time - a.time).slice(0, 40)
   tapeCache = { at: Date.now(), rows }
   return rows
+}
+
+export const stockMarkets = async () => {
+  const traders = await traderBoard()
+  const rows = new Map<string, {
+    label: string
+    longUsd: number
+    shortUsd: number
+    longWallets: number
+    shortWallets: number
+    biggestUsd: number
+    biggestSide: "long" | "short"
+  }>()
+  for (const trader of traders) {
+    for (const position of trader.positions) {
+      const current = rows.get(position.label) ?? {
+        label: position.label,
+        longUsd: 0,
+        shortUsd: 0,
+        longWallets: 0,
+        shortWallets: 0,
+        biggestUsd: 0,
+        biggestSide: position.side,
+      }
+      if (position.side === "long") {
+        current.longUsd += position.positionValue
+        current.longWallets += 1
+      } else {
+        current.shortUsd += position.positionValue
+        current.shortWallets += 1
+      }
+      if (position.positionValue > current.biggestUsd) {
+        current.biggestUsd = position.positionValue
+        current.biggestSide = position.side
+      }
+      rows.set(position.label, current)
+    }
+  }
+  return [...rows.values()].sort((a, b) => b.longUsd + b.shortUsd - (a.longUsd + a.shortUsd))
+}
+
+export const stockMarket = async (ticker: string) => {
+  const label = ticker.toUpperCase()
+  const markets = await stockMarkets()
+  const market = markets.find((row) => row.label.toUpperCase() === label)
+  if (!market) return null
+  const traders = await traderBoard()
+  const holders = traders.flatMap((trader) => {
+    const position = trader.positions.find((item) => item.label.toUpperCase() === label)
+    if (!position) return []
+    return [{
+      address: trader.address,
+      nickname: trader.nickname,
+      side: position.side,
+      sizeUsd: position.positionValue,
+      leverage: position.leverage,
+    }]
+  }).sort((a, b) => b.sizeUsd - a.sizeUsd)
+  const prints = (await traderTape()).filter((row) => row.label.toUpperCase() === label)
+  return { ...market, holders, prints }
+}
+
+export const joinersFor = async (trader: string) => {
+  const rows = await prisma.join.findMany({
+    where: { trader: trader.toLowerCase(), status: { in: ["active", "paused"] } },
+    include: { user: { select: { evmAddress: true } } },
+  })
+  return {
+    count: rows.length,
+    copiedUsd: rows.reduce((sum, row) => sum + row.sizeUsd, 0),
+    wallets: rows.flatMap((row) => (row.user.evmAddress ? [row.user.evmAddress] : [])),
+  }
+}
+
+export const siteStats = async () => {
+  const [joins, deposits, actions, copiedTrades] = await Promise.all([
+    prisma.join.findMany({ where: { status: { in: ["active", "paused"] } }, select: { userId: true, sizeUsd: true } }),
+    prisma.deposit.findMany({ where: { status: "done" }, select: { raw: true } }),
+    prisma.copyAction.findMany({
+      where: { status: "done" },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      include: { join: { select: { trader: true, user: { select: { evmAddress: true } } } } },
+    }),
+    prisma.copyAction.count({ where: { status: "done" } }),
+  ])
+  return {
+    walletsJoined: new Set(joins.map((row) => row.userId)).size,
+    copiedUsd: joins.reduce((sum, row) => sum + row.sizeUsd, 0),
+    copiedTrades,
+    depositsUsd: deposits.reduce((sum, row) => {
+      const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw as { amountUsd?: unknown } : {}
+      const usd = Number(raw.amountUsd ?? 0)
+      return sum + (Number.isFinite(usd) ? usd : 0)
+    }, 0),
+    recent: actions.map((row) => ({
+      id: row.id,
+      trader: row.join.trader,
+      coin: row.coin,
+      detail: row.detail,
+      traderAction: row.traderAction,
+      ourAction: row.ourAction,
+      ourSize: row.ourSize,
+      side: row.side,
+      evmAddress: row.join.user.evmAddress,
+      createdAt: row.createdAt.toISOString(),
+    })),
+  }
 }
 
 export const accountValueFor = async (address: string) => {

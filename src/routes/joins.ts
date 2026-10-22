@@ -26,7 +26,7 @@ joins.get("/", async (c) => {
   const user = await readSession(c.req.header("authorization")?.replace("Bearer ", ""))
   if (!user) return c.json({ error: "Unauthorized" }, 401)
   const rows = await prisma.join.findMany({
-    where: { userId: user.id, status: "active" },
+    where: { userId: user.id, status: { in: ["active", "paused"] } },
     orderBy: { createdAt: "desc" },
     include: { actions: { orderBy: { createdAt: "desc" }, take: 12 } },
   })
@@ -51,6 +51,8 @@ joins.get("/", async (c) => {
     return {
       id: row.id,
       trader: row.trader,
+      traderNickname: trader?.nickname ?? null,
+      status: row.status,
       sizeUsd: row.sizeUsd,
       createdAt: row.createdAt,
       traderPnl7d: trader?.pnl7d ?? null,
@@ -118,6 +120,45 @@ joins.post("/", async (c) => {
       },
     })
   return c.json({ id: saved.id, trader: saved.trader, sizeUsd: saved.sizeUsd, maxLeverage: saved.maxLeverage, status: saved.status })
+})
+
+joins.post("/:id/pause", async (c) => {
+  const user = await readSession(c.req.header("authorization")?.replace("Bearer ", ""))
+  if (!user) return c.json({ error: "Unauthorized" }, 401)
+  const row = await prisma.join.findFirst({ where: { id: c.req.param("id"), userId: user.id, status: { in: ["active", "paused"] } } })
+  if (!row) return c.json({ error: "Unknown copy" }, 404)
+  const saved = await prisma.join.update({ where: { id: row.id }, data: { status: "paused" } })
+  return c.json({ id: saved.id, status: saved.status })
+})
+
+joins.post("/:id/resume", async (c) => {
+  const user = await readSession(c.req.header("authorization")?.replace("Bearer ", ""))
+  if (!user) return c.json({ error: "Unauthorized" }, 401)
+  const row = await prisma.join.findFirst({ where: { id: c.req.param("id"), userId: user.id, status: "paused" } })
+  if (!row) return c.json({ error: "Unknown copy" }, 404)
+  const saved = await prisma.join.update({ where: { id: row.id }, data: { status: "active" } })
+  return c.json({ id: saved.id, status: saved.status })
+})
+
+joins.post("/:id/update", async (c) => {
+  const user = await readSession(c.req.header("authorization")?.replace("Bearer ", ""))
+  if (!user) return c.json({ error: "Unauthorized" }, 401)
+  const body = z.object({
+    sizeUsd: z.number().positive().optional(),
+    maxLeverage: z.number().int().min(1).max(50).nullable().optional(),
+  }).parse(await c.req.json())
+  if (body.sizeUsd !== undefined && body.sizeUsd < 10) return c.json({ error: "Minimum join size is $10." }, 400)
+  if (body.sizeUsd !== undefined && body.sizeUsd > 1_000_000) return c.json({ error: "Maximum join size is $1,000,000." }, 400)
+  const row = await prisma.join.findFirst({ where: { id: c.req.param("id"), userId: user.id, status: { in: ["active", "paused"] } } })
+  if (!row) return c.json({ error: "Unknown copy" }, 404)
+  const saved = await prisma.join.update({
+    where: { id: row.id },
+    data: {
+      ...(body.sizeUsd !== undefined ? { sizeUsd: body.sizeUsd } : {}),
+      ...(body.maxLeverage !== undefined ? { maxLeverage: body.maxLeverage } : {}),
+    },
+  })
+  return c.json({ id: saved.id, sizeUsd: saved.sizeUsd, maxLeverage: saved.maxLeverage, status: saved.status })
 })
 
 joins.post("/:id/stop", async (c) => {
