@@ -65,9 +65,10 @@ model Join {
   id        String       @id @default(cuid())
   userId    String
   user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  trader    String
-  sizeUsd   Float
-  status    String       @default("active")
+  trader       String
+  sizeUsd      Float
+  maxLeverage  Int?
+  status       String       @default("active")
   seen      Json
   pending   Json
   copied    Json

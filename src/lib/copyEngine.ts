@@ -116,6 +116,7 @@ type JoinRow = {
   userId: string
   trader: string
   sizeUsd: number
+  maxLeverage: number | null
   seen: unknown
   pending: unknown
   copied: unknown
@@ -195,7 +196,7 @@ const syncJoin = async (
     const scaled = scaledDelta({
       traderDelta: queued,
       traderLeverage: traderLev,
-      maxLeverage: market?.maxLeverage ?? traderLev,
+      maxLeverage: join.maxLeverage && join.maxLeverage > 0 ? join.maxLeverage : (market?.maxLeverage ?? traderLev),
       userSizeUsd: join.sizeUsd,
       traderAccountValue: accountValue,
     })

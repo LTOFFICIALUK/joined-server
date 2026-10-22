@@ -1,0 +1,1 @@
+ALTER TABLE "Join" ADD COLUMN "maxLeverage" INTEGER;

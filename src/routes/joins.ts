@@ -55,6 +55,7 @@ joins.get("/", async (c) => {
       createdAt: row.createdAt,
       traderPnl7d: trader?.pnl7d ?? null,
       traderAccountValue: trader?.accountValue ?? null,
+      maxLeverage: row.maxLeverage,
       positions,
       actions: row.actions.map((action) => ({
         id: action.id,
@@ -79,6 +80,7 @@ joins.post("/", async (c) => {
   const body = z.object({
     trader: addressSchema,
     sizeUsd: z.number().positive(),
+    maxLeverage: z.number().int().min(1).max(50).nullable().optional(),
   }).parse(await c.req.json())
   if (body.sizeUsd < 10) return c.json({ error: "Minimum join size is $10." }, 400)
   if (body.sizeUsd > 1_000_000) return c.json({ error: "Maximum join size is $1,000,000." }, 400)
@@ -96,6 +98,7 @@ joins.post("/", async (c) => {
       where: { id: existing.id },
       data: {
         sizeUsd: body.sizeUsd,
+        maxLeverage: body.maxLeverage ?? null,
         status: "active",
         seen: seen as Prisma.InputJsonValue,
         pending: {},
@@ -108,12 +111,13 @@ joins.post("/", async (c) => {
         userId: user.id,
         trader,
         sizeUsd: body.sizeUsd,
+        maxLeverage: body.maxLeverage ?? null,
         seen: seen as Prisma.InputJsonValue,
         pending: {},
         copied: {},
       },
     })
-  return c.json({ id: saved.id, trader: saved.trader, sizeUsd: saved.sizeUsd, status: saved.status })
+  return c.json({ id: saved.id, trader: saved.trader, sizeUsd: saved.sizeUsd, maxLeverage: saved.maxLeverage, status: saved.status })
 })
 
 joins.post("/:id/stop", async (c) => {

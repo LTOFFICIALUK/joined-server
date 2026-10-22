@@ -31,6 +31,43 @@ export type TraderView = {
   }>
   pnl30Series: PnlPoint[]
   joined: number
+  winRate: number
+  maxDrop: number
+  score: number
+}
+
+const monthStats = (series: PnlPoint[]) => {
+  if (series.length < 2) return { winRate: 0.5, maxDrop: 0 }
+  let up = 0
+  let down = 0
+  let peak = series[0]?.v ?? 0
+  let maxDrop = 0
+  for (let index = 1; index < series.length; index += 1) {
+    const prev = series[index - 1]?.v ?? 0
+    const next = series[index]?.v ?? 0
+    if (next > prev) up += 1
+    else if (next < prev) down += 1
+    peak = Math.max(peak, next)
+    maxDrop = Math.max(maxDrop, peak - next)
+  }
+  const steps = up + down
+  return { winRate: steps ? up / steps : 0.5, maxDrop }
+}
+
+const copyScore = (pnl30d: number, winRate: number, maxDrop: number, accountValue: number) => {
+  const quality = 0.4 + 0.6 * Math.min(1, Math.max(0, winRate))
+  const base = accountValue > 0 ? accountValue : Math.max(Math.abs(pnl30d), 1)
+  return pnl30d * quality * (1 / (1 + maxDrop / base))
+}
+
+const scored = <T extends { pnl30d: number; accountValue: number; pnl30Series: PnlPoint[] }>(row: T) => {
+  const stats = monthStats(row.pnl30Series)
+  return {
+    ...row,
+    winRate: stats.winRate,
+    maxDrop: stats.maxDrop,
+    score: copyScore(row.pnl30d, stats.winRate, stats.maxDrop, row.accountValue),
+  }
 }
 
 const windowValue = (row: LeaderboardRow, name: string, key: "pnl" | "roi") => {
@@ -83,7 +120,7 @@ const buildTrader = async (
       series = []
     }
   }
-  return {
+  return scored({
     address,
     displayName: row.displayName ?? null,
     accountValue,
@@ -94,7 +131,7 @@ const buildTrader = async (
     positions: stock.positions.map(publicPosition),
     pnl30Series: series,
     joined,
-  }
+  })
 }
 
 let board: { at: number; traders: TraderView[] } | null = null
@@ -103,7 +140,7 @@ let inflight: Promise<TraderView[]> | null = null
 const scanBoard = async () => {
   const payload = await getLeaderboard()
   const rows = payload.leaderboardRows ?? []
-  const ranked = [...rows].sort((a, b) => windowValue(b, "week", "pnl") - windowValue(a, "week", "pnl"))
+  const ranked = [...rows].sort((a, b) => windowValue(b, "month", "pnl") - windowValue(a, "month", "pnl"))
   const candidates = ranked.slice(0, 80)
   const counts = await joinCountMap()
   const probed = await mapPool(candidates, 6, async (row) => {
@@ -129,7 +166,7 @@ const scanBoard = async () => {
     ...probed.flatMap((item) => (item.stock ? [item as { row: LeaderboardRow; stock: NonNullable<typeof item.stock> }] : [])),
     ...others.flatMap((item) => (item ? [item] : [])),
   ]
-    .sort((a, b) => windowValue(b.row, "week", "pnl") - windowValue(a.row, "week", "pnl"))
+    .sort((a, b) => windowValue(b.row, "month", "pnl") - windowValue(a.row, "month", "pnl"))
     .slice(0, 24)
   const traders = await mapPool(found, 4, async (item) => {
     const stock = item.stock
@@ -140,7 +177,7 @@ const scanBoard = async () => {
     } catch {
       series = []
     }
-    return {
+    return scored({
       address: item.row.ethAddress,
       displayName: item.row.displayName ?? null,
       accountValue,
@@ -151,9 +188,9 @@ const scanBoard = async () => {
       positions: stock.positions.map(publicPosition),
       pnl30Series: series,
       joined: counts.get(item.row.ethAddress.toLowerCase()) ?? 0,
-    } satisfies TraderView
+    }) satisfies TraderView
   })
-  return traders.sort((a, b) => b.pnl7d - a.pnl7d)
+  return traders.sort((a, b) => b.score - a.score)
 }
 
 export const traderBoard = async () => {
@@ -186,7 +223,7 @@ export const traderByAddress = async (address: string) => {
     } catch {
       series = []
     }
-    return {
+    return scored({
       address,
       displayName: null,
       accountValue: stock.accountValue,
@@ -197,7 +234,7 @@ export const traderByAddress = async (address: string) => {
       positions: stock.positions.map(publicPosition),
       pnl30Series: series,
       joined: counts.get(normalized) ?? 0,
-    } satisfies TraderView
+    }) satisfies TraderView
   }
   return buildTrader(row, counts.get(normalized) ?? 0, true)
 }
@@ -216,6 +253,36 @@ export const traderFills = async (address: string) => {
     dir: fill.dir ?? "",
     time: Number(fill.time ?? 0),
   }))
+}
+
+export type TapePrint = {
+  address: string
+  label: string
+  side: "long" | "short"
+  size: number
+  price: number
+  time: number
+}
+
+let tapeCache: { at: number; rows: TapePrint[] } | null = null
+
+export const traderTape = async () => {
+  if (tapeCache && Date.now() - tapeCache.at < 20_000) return tapeCache.rows
+  const traders = (await traderBoard()).slice(0, 6)
+  const batches = await mapPool(traders, 3, async (trader) => {
+    const fills = await recentStockFills(trader.address).catch(() => [])
+    return fills.slice(0, 8).map((fill) => ({
+      address: trader.address,
+      label: (fill.coin ?? "").split(":").pop() ?? "",
+      side: fill.side === "B" ? "long" as const : "short" as const,
+      size: Number(fill.sz ?? 0),
+      price: Number(fill.px ?? 0),
+      time: Number(fill.time ?? 0),
+    }))
+  })
+  const rows = batches.flat().filter((row) => row.size > 0 && row.price > 0).sort((a, b) => b.time - a.time).slice(0, 40)
+  tapeCache = { at: Date.now(), rows }
+  return rows
 }
 
 export const accountValueFor = async (address: string) => {

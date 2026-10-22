@@ -1,5 +1,5 @@
 import { Hono } from "hono"
-import { traderBoard, traderByAddress, traderFills } from "../lib/traders.js"
+import { traderBoard, traderByAddress, traderFills, traderTape } from "../lib/traders.js"
 
 export const traders = new Hono()
 
@@ -8,6 +8,11 @@ const addressOf = (value: string) => /^0x[a-fA-F0-9]{40}$/.test(value)
 traders.get("/", async (c) => {
   const rows = await traderBoard()
   return c.json({ traders: rows, asOf: Date.now() })
+})
+
+traders.get("/tape", async (c) => {
+  const rows = await traderTape()
+  return c.json({ tape: rows, asOf: Date.now() })
 })
 
 traders.get("/:address", async (c) => {
