@@ -231,6 +231,10 @@ const refreshBoard = () => {
       board = { at: Date.now() - (weak ? 10_000 : 0), traders: next }
       return next
     })
+    .catch((err) => {
+      console.error(err instanceof Error ? err.message : "Board scan failed")
+      return board?.traders ?? []
+    })
     .finally(() => {
       inflight = null
     })

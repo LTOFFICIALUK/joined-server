@@ -65,3 +65,10 @@ const server = serve({ fetch: app.fetch, port: env.port }, (info) => {
 })
 
 attachHub(server as HttpServer)
+
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled rejection:", err instanceof Error ? err.message : err)
+})
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err.message)
+})
